@@ -99,12 +99,6 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                         </div>
                     </form>
                 </div>
-                <div className="bg-gray-50 px-8 py-4 border-t text-center">
-                    <p className="text-xs text-gray-500">
-                        Demo Credentials:<br/>
-                        Inspector: <strong>EMP001 / 123</strong> | HOD: <strong>EMP002 / 123</strong> | Admin: <strong>ADMIN / admin</strong>
-                    </p>
-                </div>
             </div>
         </div>
     );
