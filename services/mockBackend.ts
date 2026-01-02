@@ -5,32 +5,191 @@ import {
     PokaYokeRecord, ProcessSetupMaster, ProcessSetupRecord, ProcessValidationPlan 
 } from '../types';
 
-// In-memory storage
-let CONTROL_PLANS: ControlPlan[] = [];
-let CONTROL_PLAN_LOGS: ControlPlanChangeLog[] = [];
-let INSPECTION_LOGS: InspectionRecord[] = [];
-let NC_RECORDS: NCRecord[] = [];
-let INSTRUMENTS: Instrument[] = [
+// --- PERSISTENCE LAYER CONSTANTS ---
+const DB_KEYS = {
+    USERS: 'EQMS_USERS',
+    CONTROL_PLANS: 'EQMS_CONTROL_PLANS',
+    CONTROL_PLAN_LOGS: 'EQMS_CP_LOGS',
+    INSPECTIONS: 'EQMS_INSPECTIONS',
+    NC_RECORDS: 'EQMS_NC_RECORDS',
+    INSTRUMENTS: 'EQMS_INSTRUMENTS',
+    POKA_YOKE: 'EQMS_POKA_YOKE',
+    PROCESS_MASTERS: 'EQMS_PROCESS_MASTERS',
+    PROCESS_LOGS: 'EQMS_PROCESS_LOGS',
+    VALIDATION_PLANS: 'EQMS_VALIDATION_PLANS',
+    SESSION: 'EQMS_CURRENT_SESSION'
+};
+
+// --- DATA ACCESS LAYER (DAL) ---
+
+// Helper to load data with fallback
+const load = <T>(key: string, defaultVal: T): T => {
+    try {
+        const stored = localStorage.getItem(key);
+        return stored ? JSON.parse(stored) : defaultVal;
+    } catch (e) {
+        console.error(`Error loading ${key}`, e);
+        return defaultVal;
+    }
+};
+
+// Helper to commit data
+const commit = (key: string, data: any) => {
+    try {
+        localStorage.setItem(key, JSON.stringify(data));
+    } catch (e) {
+        console.error(`Error saving ${key}`, e);
+        alert("Storage Quota Exceeded! Unable to save data.");
+    }
+};
+
+// --- STATE INITIALIZATION ---
+
+let USERS: User[] = load(DB_KEYS.USERS, []);
+let CONTROL_PLANS: ControlPlan[] = load(DB_KEYS.CONTROL_PLANS, []);
+let CONTROL_PLAN_LOGS: ControlPlanChangeLog[] = load(DB_KEYS.CONTROL_PLAN_LOGS, []);
+let INSPECTION_LOGS: InspectionRecord[] = load(DB_KEYS.INSPECTIONS, []);
+let NC_RECORDS: NCRecord[] = load(DB_KEYS.NC_RECORDS, []);
+let INSTRUMENTS: Instrument[] = load(DB_KEYS.INSTRUMENTS, [
     { id: 'INS-001', name: 'Digital Vernier', serialNumber: 'DV-992', lastCalibration: '2023-10-01', frequencyDays: 365, nextDueDate: '2024-10-01', status: 'OK' },
     { id: 'INS-002', name: 'Air Gauge Unit', serialNumber: 'AG-221', lastCalibration: '2024-01-15', frequencyDays: 90, nextDueDate: '2024-04-15', status: 'DUE_SOON' }
-];
+]);
+let POKA_YOKE_LOGS: PokaYokeRecord[] = load(DB_KEYS.POKA_YOKE, []);
+let PROCESS_SETUP_MASTERS: ProcessSetupMaster[] = load(DB_KEYS.PROCESS_MASTERS, []);
+let PROCESS_SETUP_LOGS: ProcessSetupRecord[] = load(DB_KEYS.PROCESS_LOGS, []);
+let VALIDATION_PLANS: ProcessValidationPlan[] = load(DB_KEYS.VALIDATION_PLANS, []);
 
-// NEW STORAGE
-let POKA_YOKE_LOGS: PokaYokeRecord[] = [];
-let PROCESS_SETUP_MASTERS: ProcessSetupMaster[] = [];
-let PROCESS_SETUP_LOGS: ProcessSetupRecord[] = [];
-let VALIDATION_PLANS: ProcessValidationPlan[] = [];
+// Session is transient in memory for security, but we could persist token here if needed
+let CURRENT_USER: User | null = (() => {
+    const session = sessionStorage.getItem(DB_KEYS.SESSION);
+    return session ? JSON.parse(session) : null;
+})();
 
-// --- USER & AUTH MOCK ---
 const SIGNATURE_IMAGE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJYAAAAyCAYAAAC+jCIaAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAABiSURBVHgB7c6xCQAgDAVB91/6rSAYCGIn7sC8x8D+cwEAAGB91j2v52UAAIB1Wfe8npcBAADWZd3zel4GAABYl3XP63kZAABgXdY9r+dlAACAdVn3vJ6XAQAA1mXd83peBgAAWJc105cA1iE0d4IAAAAASUVORK5CYII=";
 
-let USERS: User[] = [
-    { id: 'u1', userCode: 'EMP001', name: 'Rajesh Kumar', email: 'rajesh@texspin.com', password: '123', role: 'INSPECTOR', department: 'Assembly', status: 'ACTIVE' },
-    { id: 'u2', userCode: 'EMP002', name: 'Amit Varma', email: 'amit@texspin.com', password: '123', role: 'HOD', department: 'Quality', signatureUrl: SIGNATURE_IMAGE, status: 'ACTIVE' },
-    { id: 'u3', userCode: 'ADMIN', name: 'System Admin', email: 'admin@texspin.com', password: 'admin', role: 'ADMIN', department: 'IT', status: 'ACTIVE' }
-];
+// --- SEED DATA LOGIC (Run only if empty) ---
+const seedData = () => {
+    if (USERS.length > 0) return; // DB already exists
 
-let CURRENT_USER: User | null = null;
+    console.log("Seeding Initial Database...");
+
+    // Seed Users
+    USERS = [
+        { id: 'u1', userCode: 'EMP001', name: 'Rajesh Kumar', email: 'rajesh@texspin.com', password: '123', role: 'INSPECTOR', department: 'Assembly', status: 'ACTIVE' },
+        { id: 'u2', userCode: 'EMP002', name: 'Amit Varma', email: 'amit@texspin.com', password: '123', role: 'HOD', department: 'Quality', signatureUrl: SIGNATURE_IMAGE, status: 'ACTIVE' },
+        { id: 'u3', userCode: 'ADMIN', name: 'System Admin', email: 'admin@texspin.com', password: 'admin', role: 'ADMIN', department: 'IT', status: 'ACTIVE' }
+    ];
+    commit(DB_KEYS.USERS, USERS);
+
+    // Seed Control Plan
+    if (CONTROL_PLANS.length === 0) {
+        const cp: ControlPlan = {
+            id: 'temp-1',
+            controlPlanNumber: 'TBL/CP/251',
+            partNumber: 'ZA28708.2',
+            partName: 'TX-3052 SC CLUTCH RELEASE BEARING',
+            processFamily: 'Assembly',
+            phase: 'PRODUCTION',
+            version: 1,
+            status: PlanStatus.ACTIVE,
+            approvalDate: '2023-10-19',
+            coreTeam: 'Mr. Parakram, Mr. Devendra',
+            year: 2024,
+            items: [
+                {
+                    id: 'row-1', stepNumber: '13.01', processName: 'Visual Inspection', machineDevice: 'Manually',
+                    charNo: 1, productDesc: 'Component Free From Rust, Dent, foreign particle', processDesc: '',
+                    specialCharClass: '', tolerance: 'Free From Rust, Dent', evaluationTechnique: 'Visually',
+                    sampleSize: '100%', frequency: 'Continuous', controlMethod: 'VA-49/1',
+                    reactionPlan: 'Stop machine, inform Prod Engineer', responsibility: 'Assy Supervisor', 
+                    isPokaYoke: false, isActive: true, unit: '-'
+                },
+                {
+                    id: 'row-2', stepNumber: '13.31', processName: 'Wave Spring Fitment', machineDevice: 'Hydro-pneumatic Press',
+                    charNo: 2, productDesc: 'Radial Displacement Force', processDesc: 'Pressure 50 to 110 kg/cm2',
+                    specialCharClass: '9', tolerance: '80 ± 30 N', 
+                    nominal: 80, lsl: 50, usl: 110, unit: 'N',
+                    evaluationTechnique: 'Semi-automatic machine',
+                    sampleSize: '5 Pc', frequency: '2 Pc / 2 hour', controlMethod: 'FPI & In process',
+                    reactionPlan: 'Reject/hold the Lot', responsibility: 'QA Engineer', 
+                    isPokaYoke: true, isActive: true
+                },
+                {
+                    id: 'row-3', stepNumber: '13.04', processName: 'Grease Filling', machineDevice: 'Automatic M/c',
+                    charNo: 2, productDesc: 'Grease Qty', processDesc: 'Pressure 2-4 kg/cm2',
+                    specialCharClass: '9', tolerance: '1.7 ± 0.20 g', 
+                    nominal: 1.7, lsl: 1.5, usl: 1.9, unit: 'g',
+                    evaluationTechnique: 'Weigh scale',
+                    sampleSize: '5 pcs', frequency: '2 pc / 2 hour', controlMethod: 'SPC Analysis',
+                    reactionPlan: 'Sort out Defective Parts', responsibility: 'QA Engineer', 
+                    isPokaYoke: false, isActive: true
+                }
+            ]
+        };
+        CONTROL_PLANS.push(cp);
+        commit(DB_KEYS.CONTROL_PLANS, CONTROL_PLANS);
+    }
+
+    // Seed Process Master
+    if (PROCESS_SETUP_MASTERS.length === 0) {
+        PROCESS_SETUP_MASTERS.push({
+            id: 'pm-1',
+            partNumber: 'ZA28708.2',
+            machineNo: 'HP-PRESS-01',
+            processName: 'Wave Spring Fitment',
+            parameters: [
+                { id: 'p1', name: 'Hydraulic Pressure', specification: '50 - 110 kg/cm2', class: 'Critical', controlMethod: 'Pressure Gauge' },
+                { id: 'p2', name: 'Hold Time', specification: '2 - 4 sec', class: 'Major', controlMethod: 'Timer' },
+                { id: 'p3', name: 'Fixture Alignment', specification: 'OK / NOK', class: 'Minor', controlMethod: 'Visual' }
+            ]
+        });
+        commit(DB_KEYS.PROCESS_MASTERS, PROCESS_SETUP_MASTERS);
+    }
+    
+    // Seed Validation Plan
+    if (VALIDATION_PLANS.length === 0) {
+        const date = new Date();
+        const nextDate = new Date();
+        nextDate.setMonth(date.getMonth() + 1);
+        
+        VALIDATION_PLANS.push({
+            id: 'val-1',
+            partNumber: 'ZA28708.2',
+            partName: 'Clutch Release Bearing',
+            lineMachineNo: 'Assembly Line 1',
+            validationType: 'INITIAL',
+            controlPlanRef: 'TBL/CP/251',
+            validationDate: date.toISOString().split('T')[0],
+            nextDueDate: nextDate.toISOString().split('T')[0],
+            frequencyMonths: 1,
+            status: InspectionStatus.APPROVED,
+            validatedBy: 'Rajesh Kumar',
+            approvedBy: 'Amit Varma',
+            approvalDate: '2024-02-16',
+            approvalRemark: 'Validation Successful. Process Stable.',
+            processes: [
+                {
+                    id: 'proc-1',
+                    processName: '10.20 Grease Filling',
+                    parameters: [
+                        {
+                            id: 'param-1', name: 'Grease Weight', specification: '1.5 - 1.9 g', unit: 'g', lsl: 1.5, usl: 1.9,
+                            trials: [
+                                { id: 't1', trialNo: 1, readings: [1.6, 1.7, 1.65, 1.72, 1.68], observation: 'Within limit', status: 'OK' },
+                                { id: 't2', trialNo: 2, readings: [1.55, 1.6, 1.58, 1.62, 1.6], observation: 'Within limit', status: 'OK' }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        });
+        commit(DB_KEYS.VALIDATION_PLANS, VALIDATION_PLANS);
+    }
+};
+
+// Execute Seed
+seedData();
+
 
 // --- AUTHENTICATION ---
 
@@ -49,11 +208,13 @@ export const login = (userCodeOrEmail: string, password: string): User => {
     }
 
     CURRENT_USER = user;
+    sessionStorage.setItem(DB_KEYS.SESSION, JSON.stringify(user));
     return user;
 };
 
 export const logout = () => {
     CURRENT_USER = null;
+    sessionStorage.removeItem(DB_KEYS.SESSION);
 };
 
 export const getCurrentUser = (): User => {
@@ -83,12 +244,14 @@ export const saveUser = (user: User): void => {
     } else {
         USERS.push(user);
     }
+    commit(DB_KEYS.USERS, USERS);
 };
 
 export const toggleUserStatus = (id: string): void => {
     const user = USERS.find(u => u.id === id);
     if (user) {
         user.status = user.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+        commit(DB_KEYS.USERS, USERS);
     }
 };
 
@@ -147,6 +310,7 @@ export const saveControlPlan = (draft: ControlPlan, changeReason: string = "Vers
     };
 
     CONTROL_PLANS.push(newPlan);
+    commit(DB_KEYS.CONTROL_PLANS, CONTROL_PLANS);
 
     const log: ControlPlanChangeLog = {
         id: crypto.randomUUID(),
@@ -159,6 +323,7 @@ export const saveControlPlan = (draft: ControlPlan, changeReason: string = "Vers
         changes: changes
     };
     CONTROL_PLAN_LOGS.push(log);
+    commit(DB_KEYS.CONTROL_PLAN_LOGS, CONTROL_PLAN_LOGS);
 };
 
 export const getUniqueParts = () => {
@@ -209,6 +374,7 @@ export const saveInspection = (record: InspectionRecord): void => {
     if (!safeRecord.status) safeRecord.status = InspectionStatus.SUBMITTED;
 
     INSPECTION_LOGS.push(safeRecord);
+    commit(DB_KEYS.INSPECTIONS, INSPECTION_LOGS);
 
     if (safeRecord.overallResult === 'NG') {
         createNC({
@@ -245,13 +411,16 @@ export const getPendingInspections = (): InspectionRecord[] => {
 export const approveInspection = (id: string, status: InspectionStatus, remark?: string) => {
     const record = INSPECTION_LOGS.find(r => r.id === id);
     if (!record) throw new Error("Inspection record not found.");
-    return handleGenericApproval(record, status, remark || '');
+    const updated = handleGenericApproval(record, status, remark || '');
+    commit(DB_KEYS.INSPECTIONS, INSPECTION_LOGS);
+    return updated;
 };
 
 // --- MODULE 3: NC & CAPA ENGINE ---
 
 export const createNC = (nc: NCRecord): void => {
     NC_RECORDS.push(nc);
+    commit(DB_KEYS.NC_RECORDS, NC_RECORDS);
 };
 
 export const getNCRecords = (): NCRecord[] => {
@@ -265,6 +434,7 @@ export const updateNCStatus = (ncId: string, updates: Partial<NCRecord>): void =
         throw new Error("Cannot close NC without Effectiveness Verification.");
     }
     Object.assign(nc, updates);
+    commit(DB_KEYS.NC_RECORDS, NC_RECORDS);
 };
 
 // --- MODULE 4: POKA YOKE ENGINE ---
@@ -273,6 +443,7 @@ export const savePokaYoke = (record: PokaYokeRecord): void => {
     // Set initial status to SUBMITTED
     record.status = InspectionStatus.SUBMITTED;
     POKA_YOKE_LOGS.push(record);
+    commit(DB_KEYS.POKA_YOKE, POKA_YOKE_LOGS);
     
     // Auto NC
     if (record.verifications.some(v => v.status === 'NG')) {
@@ -308,7 +479,9 @@ export const approvePokaYoke = (id: string, status: InspectionStatus, remark: st
         if (hasNG) throw new Error("Cannot Approve: Poka-Yoke verification has NG checkpoints. Reject or fix.");
     }
 
-    return handleGenericApproval(record, status, remark);
+    const updated = handleGenericApproval(record, status, remark);
+    commit(DB_KEYS.POKA_YOKE, POKA_YOKE_LOGS);
+    return updated;
 };
 
 // --- MODULE 5: PROCESS APPROVAL ENGINE ---
@@ -324,11 +497,13 @@ export const saveProcessMaster = (master: ProcessSetupMaster) => {
     } else {
         PROCESS_SETUP_MASTERS.push(master);
     }
+    commit(DB_KEYS.PROCESS_MASTERS, PROCESS_SETUP_MASTERS);
 };
 
 export const saveProcessSetupRecord = (record: ProcessSetupRecord) => {
     record.status = InspectionStatus.SUBMITTED;
     PROCESS_SETUP_LOGS.push(record);
+    commit(DB_KEYS.PROCESS_LOGS, PROCESS_SETUP_LOGS);
 };
 
 export const getProcessSetupHistory = () => {
@@ -345,8 +520,9 @@ export const approveProcessSetup = (id: string, status: InspectionStatus, remark
     const record = PROCESS_SETUP_LOGS.find(r => r.id === id);
     if (!record) throw new Error("Process Setup record not found.");
     
-    // Process Approval doesn't strictly block NG approvals (might be conditional), but usually warns
-    return handleGenericApproval(record, status, remark);
+    const updated = handleGenericApproval(record, status, remark);
+    commit(DB_KEYS.PROCESS_LOGS, PROCESS_SETUP_LOGS);
+    return updated;
 };
 
 // --- MODULE 6: PROCESS VALIDATION (UPDATED) ---
@@ -370,6 +546,7 @@ export const saveValidationPlan = (plan: ProcessValidationPlan) => {
     plan.status = InspectionStatus.SUBMITTED; // Force SUBMITTED
     
     VALIDATION_PLANS.push(plan);
+    commit(DB_KEYS.VALIDATION_PLANS, VALIDATION_PLANS);
 };
 
 export const getValidationPlans = () => {
@@ -397,7 +574,9 @@ export const approveValidationPlan = (id: string, status: InspectionStatus, rema
         if (hasNG) throw new Error("Cannot Approve: One or more Validation Trials are NG. Please review.");
     }
 
-    return handleGenericApproval(plan, status, remark);
+    const updated = handleGenericApproval(plan, status, remark);
+    commit(DB_KEYS.VALIDATION_PLANS, VALIDATION_PLANS);
+    return updated;
 };
 
 export const getValidationStatus = (plan: ProcessValidationPlan): 'VALID' | 'DUE_SOON' | 'OVERDUE' => {
@@ -464,107 +643,3 @@ export const getPPMData = () => {
         { name: 'May', ppm: 900 },
     ];
 };
-
-// Seed Data
-const seedData = () => {
-    CURRENT_USER = { id: 'sys', userCode: 'SYS', name: 'System', email: 'sys', password: '', role: 'ADMIN', department: 'IT', status: 'ACTIVE' };
-
-    if (CONTROL_PLANS.length === 0) {
-        saveControlPlan({
-            id: 'temp-1',
-            controlPlanNumber: 'TBL/CP/251',
-            partNumber: 'ZA28708.2',
-            partName: 'TX-3052 SC CLUTCH RELEASE BEARING',
-            processFamily: 'Assembly',
-            phase: 'PRODUCTION',
-            version: 1,
-            status: PlanStatus.ACTIVE,
-            approvalDate: '2023-10-19',
-            coreTeam: 'Mr. Parakram, Mr. Devendra',
-            year: 2024,
-            items: [
-                {
-                    id: 'row-1', stepNumber: '13.01', processName: 'Visual Inspection', machineDevice: 'Manually',
-                    charNo: 1, productDesc: 'Component Free From Rust, Dent, foreign particle', processDesc: '',
-                    specialCharClass: '', tolerance: 'Free From Rust, Dent', evaluationTechnique: 'Visually',
-                    sampleSize: '100%', frequency: 'Continuous', controlMethod: 'VA-49/1',
-                    reactionPlan: 'Stop machine, inform Prod Engineer', responsibility: 'Assy Supervisor', 
-                    isPokaYoke: false, isActive: true, unit: '-'
-                },
-                {
-                    id: 'row-2', stepNumber: '13.31', processName: 'Wave Spring Fitment', machineDevice: 'Hydro-pneumatic Press',
-                    charNo: 2, productDesc: 'Radial Displacement Force', processDesc: 'Pressure 50 to 110 kg/cm2',
-                    specialCharClass: '9', tolerance: '80 ± 30 N', 
-                    nominal: 80, lsl: 50, usl: 110, unit: 'N',
-                    evaluationTechnique: 'Semi-automatic machine',
-                    sampleSize: '5 Pc', frequency: '2 Pc / 2 hour', controlMethod: 'FPI & In process',
-                    reactionPlan: 'Reject/hold the Lot', responsibility: 'QA Engineer', 
-                    isPokaYoke: true, isActive: true
-                },
-                {
-                    id: 'row-3', stepNumber: '13.04', processName: 'Grease Filling', machineDevice: 'Automatic M/c',
-                    charNo: 2, productDesc: 'Grease Qty', processDesc: 'Pressure 2-4 kg/cm2',
-                    specialCharClass: '9', tolerance: '1.7 ± 0.20 g', 
-                    nominal: 1.7, lsl: 1.5, usl: 1.9, unit: 'g',
-                    evaluationTechnique: 'Weigh scale',
-                    sampleSize: '5 pcs', frequency: '2 pc / 2 hour', controlMethod: 'SPC Analysis',
-                    reactionPlan: 'Sort out Defective Parts', responsibility: 'QA Engineer', 
-                    isPokaYoke: false, isActive: true
-                }
-            ]
-        }, "Initial Release");
-    }
-
-    if (PROCESS_SETUP_MASTERS.length === 0) {
-        saveProcessMaster({
-            id: 'pm-1',
-            partNumber: 'ZA28708.2',
-            machineNo: 'HP-PRESS-01',
-            processName: 'Wave Spring Fitment',
-            parameters: [
-                { id: 'p1', name: 'Hydraulic Pressure', specification: '50 - 110 kg/cm2', class: 'Critical', controlMethod: 'Pressure Gauge' },
-                { id: 'p2', name: 'Hold Time', specification: '2 - 4 sec', class: 'Major', controlMethod: 'Timer' },
-                { id: 'p3', name: 'Fixture Alignment', specification: 'OK / NOK', class: 'Minor', controlMethod: 'Visual' }
-            ]
-        });
-    }
-    
-    if (VALIDATION_PLANS.length === 0) {
-        // Valid Plan with APPROVED status
-        VALIDATION_PLANS.push({
-            id: 'val-1',
-            partNumber: 'ZA28708.2',
-            partName: 'Clutch Release Bearing',
-            lineMachineNo: 'Assembly Line 1',
-            validationType: 'INITIAL',
-            controlPlanRef: 'TBL/CP/251',
-            validationDate: new Date().toISOString().split('T')[0],
-            nextDueDate: calculateNextDueDate(new Date().toISOString().split('T')[0], 1),
-            frequencyMonths: 1,
-            status: InspectionStatus.APPROVED,
-            validatedBy: 'Rajesh Kumar',
-            approvedBy: 'Amit Varma',
-            approvalDate: '2024-02-16',
-            approvalRemark: 'Validation Successful. Process Stable.',
-            processes: [
-                {
-                    id: 'proc-1',
-                    processName: '10.20 Grease Filling',
-                    parameters: [
-                        {
-                            id: 'param-1', name: 'Grease Weight', specification: '1.5 - 1.9 g', unit: 'g', lsl: 1.5, usl: 1.9,
-                            trials: [
-                                { id: 't1', trialNo: 1, readings: [1.6, 1.7, 1.65, 1.72, 1.68], observation: 'Within limit', status: 'OK' },
-                                { id: 't2', trialNo: 2, readings: [1.55, 1.6, 1.58, 1.62, 1.6], observation: 'Within limit', status: 'OK' }
-                            ]
-                        }
-                    ]
-                }
-            ]
-        });
-    }
-
-    CURRENT_USER = null;
-};
-
-seedData();
