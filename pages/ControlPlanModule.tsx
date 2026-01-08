@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ControlPlan, ControlPlanItem, PlanStatus, ControlPlanChangeLog } from '../types';
 import * as db from '../services/mockBackend';
 import { generateControlPlanPDF } from '../services/pdfGenerator';
-import { Plus, Archive, CheckCircle, Copy, Save, AlertTriangle, RefreshCw, History, Eye, X, ArrowRight, FileDown } from 'lucide-react';
+import { Plus, Archive, CheckCircle, Copy, Save, AlertTriangle, RefreshCw, History, Eye, X, ArrowRight, FileDown, Loader2 } from 'lucide-react';
 
 const STANDARD_FAMILIES = [
     "Receiving",
@@ -44,6 +44,7 @@ export const ControlPlanModule: React.FC = () => {
     // Versioning State
     const [showSaveModal, setShowSaveModal] = useState(false);
     const [changeReason, setChangeReason] = useState('');
+    const [isSaving, setIsSaving] = useState(false);
     
     // History View State
     const [selectedPlanNumber, setSelectedPlanNumber] = useState('');
@@ -60,8 +61,8 @@ export const ControlPlanModule: React.FC = () => {
         }
     }, [view, currentPlan.id]);
 
-    const refreshData = () => {
-        setPlans(db.getAllControlPlans());
+    const refreshData = async () => {
+        setPlans(await db.getAllControlPlans());
     };
 
     const handleCreateNew = () => {
@@ -89,9 +90,9 @@ export const ControlPlanModule: React.FC = () => {
         setView('EDIT');
     };
 
-    const handleViewHistory = (cpNumber: string) => {
+    const handleViewHistory = async (cpNumber: string) => {
         setSelectedPlanNumber(cpNumber);
-        setChangeLogs(db.getControlPlanLogs(cpNumber));
+        setChangeLogs(await db.getControlPlanLogs(cpNumber));
         setView('HISTORY');
     };
 
@@ -143,15 +144,22 @@ export const ControlPlanModule: React.FC = () => {
         setShowSaveModal(true);
     };
 
-    const handleConfirmSave = () => {
+    const handleConfirmSave = async () => {
         if (!changeReason.trim()) {
             alert("Change Reason is mandatory for version control audit.");
             return;
         }
-        db.saveControlPlan(currentPlan as ControlPlan, changeReason);
-        setShowSaveModal(false);
-        refreshData();
-        setView('LIST');
+        setIsSaving(true);
+        try {
+            await db.saveControlPlan(currentPlan as ControlPlan, changeReason);
+            setShowSaveModal(false);
+            refreshData();
+            setView('LIST');
+        } catch (error: any) {
+            alert(error.message);
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     const handleFamilySelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -236,7 +244,8 @@ export const ControlPlanModule: React.FC = () => {
                     </table>
                 </div>
             )}
-
+            
+            {/* Same history and edit views ... */}
             {view === 'HISTORY' && (
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                     <div className="p-4 border-b bg-gray-50">
@@ -431,8 +440,11 @@ export const ControlPlanModule: React.FC = () => {
                             onChange={e => setChangeReason(e.target.value)}
                         />
                         <div className="flex justify-end gap-3">
-                            <button onClick={() => setShowSaveModal(false)} className="px-4 py-2 text-gray-600 font-medium hover:bg-gray-100 rounded">Cancel</button>
-                            <button onClick={handleConfirmSave} className="px-4 py-2 bg-blue-600 text-white font-medium rounded hover:bg-blue-700">Confirm & Save</button>
+                            <button onClick={() => setShowSaveModal(false)} className="px-4 py-2 text-gray-600 font-medium hover:bg-gray-100 rounded" disabled={isSaving}>Cancel</button>
+                            <button onClick={handleConfirmSave} className="px-4 py-2 bg-blue-600 text-white font-medium rounded hover:bg-blue-700 flex items-center gap-2" disabled={isSaving}>
+                                {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                                Confirm & Save
+                            </button>
                         </div>
                     </div>
                 </div>

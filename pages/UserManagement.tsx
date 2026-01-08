@@ -1,29 +1,41 @@
+
 import React, { useState, useEffect } from 'react';
 import * as db from '../services/mockBackend';
 import { User, UserRole } from '../types';
-import { Plus, Edit2, UserX, UserCheck, Shield, Save, X } from 'lucide-react';
+import { Plus, Edit2, UserX, UserCheck, Shield, Save, X, RefreshCw } from 'lucide-react';
 
 export const UserManagement: React.FC = () => {
     const [users, setUsers] = useState<User[]>([]);
     const [showModal, setShowModal] = useState(false);
+    const [loading, setLoading] = useState(false);
     
     // Form State
     const [formData, setFormData] = useState<Partial<User>>({
         userCode: '',
         name: '',
         email: '',
-        password: '',
         role: 'INSPECTOR',
         department: '',
         status: 'ACTIVE'
     });
+    
+    // Separate state for password as it's not part of User type for display
+    const [password, setPassword] = useState('');
 
     useEffect(() => {
         refreshUsers();
     }, []);
 
-    const refreshUsers = () => {
-        setUsers(db.getUsers());
+    const refreshUsers = async () => {
+        setLoading(true);
+        try {
+            const data = await db.getUsers();
+            setUsers(data);
+        } catch(e) {
+            console.error(e);
+        } finally {
+            setLoading(false);
+        }
     };
 
     const handleCreateNew = () => {
@@ -32,37 +44,48 @@ export const UserManagement: React.FC = () => {
             userCode: '',
             name: '',
             email: '',
-            password: '',
             role: 'INSPECTOR',
             department: '',
             status: 'ACTIVE'
         });
+        setPassword('');
         setShowModal(true);
     };
 
     const handleEdit = (user: User) => {
         setFormData({ ...user });
+        setPassword(''); // Don't require password on edit unless changing
         setShowModal(true);
     };
 
-    const handleToggleStatus = (id: string) => {
-        db.toggleUserStatus(id);
+    const handleToggleStatus = async (id: string) => {
+        if(!confirm("Are you sure you want to change this user's status?")) return;
+        await db.toggleUserStatus(id);
         refreshUsers();
     };
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        try {
-            const userToSave: User = {
-                ...formData,
-                id: formData.id || crypto.randomUUID(),
-            } as User;
+        
+        if (!formData.id && !password) {
+            alert("Password is required for new users.");
+            return;
+        }
 
-            db.saveUser(userToSave);
+        try {
+            if (formData.id) {
+                // Update Existing Profile
+                await db.saveUser(formData as User);
+                alert("User Profile Updated");
+            } else {
+                // Create New User (Auth + DB)
+                await db.createUser(formData as User, password);
+                alert("User Created Successfully! They can now login.");
+            }
             setShowModal(false);
             refreshUsers();
         } catch (error: any) {
-            alert(error.message);
+            alert("Operation Failed: " + error.message);
         }
     };
 
@@ -72,12 +95,17 @@ export const UserManagement: React.FC = () => {
                 <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
                     <Shield className="w-6 h-6 text-blue-600" /> User Master Management
                 </h3>
-                <button 
-                    onClick={handleCreateNew} 
-                    className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 font-medium"
-                >
-                    <Plus className="w-4 h-4" /> Add New User
-                </button>
+                <div className="flex gap-2">
+                    <button onClick={refreshUsers} className="p-2 text-gray-500 hover:text-blue-600 rounded bg-white border">
+                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                    </button>
+                    <button 
+                        onClick={handleCreateNew} 
+                        className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 font-medium"
+                    >
+                        <Plus className="w-4 h-4" /> Add New User
+                    </button>
+                </div>
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -130,6 +158,9 @@ export const UserManagement: React.FC = () => {
                                 </td>
                             </tr>
                         ))}
+                        {users.length === 0 && (
+                            <tr><td colSpan={6} className="p-8 text-center text-gray-400">No users found. Create your first user.</td></tr>
+                        )}
                     </tbody>
                 </table>
             </div>
@@ -156,7 +187,7 @@ export const UserManagement: React.FC = () => {
                             
                             <div>
                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Email ID</label>
-                                <input type="email" required value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full border rounded p-2 text-sm" placeholder="john@texspin.com" />
+                                <input type="email" required disabled={!!formData.id} value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full border rounded p-2 text-sm disabled:bg-gray-100" placeholder="john@texspin.com" />
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
@@ -166,6 +197,9 @@ export const UserManagement: React.FC = () => {
                                         <option value="INSPECTOR">Inspector</option>
                                         <option value="HOD">HOD / QA Manager</option>
                                         <option value="ADMIN">System Admin</option>
+                                        <option value="PRODUCTION">Production</option>
+                                        <option value="QUALITY">Quality</option>
+                                        <option value="VIEW_ONLY">View Only</option>
                                     </select>
                                 </div>
                                 <div>
@@ -179,18 +213,19 @@ export const UserManagement: React.FC = () => {
                                 <input 
                                     type="text" 
                                     required={!formData.id} 
-                                    value={formData.password} 
-                                    onChange={e => setFormData({...formData, password: e.target.value})} 
+                                    value={password} 
+                                    onChange={e => setPassword(e.target.value)} 
                                     className="w-full border rounded p-2 text-sm bg-yellow-50" 
                                     placeholder={formData.id ? "Leave blank to keep unchanged" : "Set Initial Password"} 
+                                    minLength={6}
                                 />
-                                <p className="text-[10px] text-gray-400 mt-1">Passwords are stored in plain text for this demo.</p>
+                                <p className="text-[10px] text-gray-400 mt-1">Min 6 characters. {formData.id ? "Only enter to reset." : ""}</p>
                             </div>
 
                             <div className="pt-4 flex justify-end gap-2">
                                 <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
                                 <button type="submit" className="px-6 py-2 bg-blue-600 text-white font-medium rounded hover:bg-blue-700 flex items-center gap-2">
-                                    <Save className="w-4 h-4" /> Save User
+                                    <Save className="w-4 h-4" /> {formData.id ? 'Update Profile' : 'Create User'}
                                 </button>
                             </div>
                         </form>

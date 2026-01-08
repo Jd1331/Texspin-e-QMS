@@ -241,7 +241,7 @@ export const ProcessValidationModule: React.FC = () => {
         }));
     };
 
-    const handleSave = () => {
+    const handleSave = async () => {
         if (!isInspector) {
             alert("Permission Denied: Only Inspectors can create and submit validation plans.");
             return;
@@ -259,7 +259,7 @@ export const ProcessValidationModule: React.FC = () => {
         } as ProcessValidationPlan;
 
         try {
-            db.saveValidationPlan(planToSave);
+            await db.saveValidationPlan(planToSave);
             alert("Validation Plan Submitted for Approval!");
             setView('LIST');
         } catch (e: any) {

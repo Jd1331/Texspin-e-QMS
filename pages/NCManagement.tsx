@@ -15,8 +15,9 @@ export const NCManagement: React.FC = () => {
         refresh();
     }, []);
 
-    const refresh = () => {
-        setNcs([...db.getNCRecords()]);
+    const refresh = async () => {
+        const records = await db.getNCRecords();
+        setNcs(records);
     };
 
     const handleSelect = (nc: NCRecord) => {
@@ -25,14 +26,14 @@ export const NCManagement: React.FC = () => {
         setAction(nc.correctiveAction || '');
     };
 
-    const updateStatus = (status: NCStatus) => {
+    const updateStatus = async (status: NCStatus) => {
         if (!selectedNC) return;
         try {
-            db.updateNCStatus(selectedNC.id, {
+            await db.updateNCStatus(selectedNC.id, {
                 status,
                 rootCause: rca,
                 correctiveAction: action,
-                effectivenessVerified: status === NCStatus.CLOSED // Simplify for demo
+                effectivenessVerified: status === NCStatus.CLOSED
             });
             refresh();
             setSelectedNC(null);

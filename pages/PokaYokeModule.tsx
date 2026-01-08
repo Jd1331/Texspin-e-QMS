@@ -33,17 +33,18 @@ export const PokaYokeModule: React.FC = () => {
         refresh();
     }, [view]);
 
-    const refresh = () => {
-        setHistory(db.getPokaYokeHistory());
-        setPlans(db.getAllControlPlans().filter(p => p.status === 'ACTIVE'));
+    const refresh = async () => {
+        setHistory(await db.getPokaYokeHistory());
+        const allPlans = await db.getAllControlPlans();
+        setPlans(allPlans.filter(p => p.status === 'ACTIVE'));
         if (isHod) {
-            setPending(db.getPendingPokaYokes());
+            setPending(await db.getPendingPokaYokes());
         }
     };
 
-    const handleSelectPart = (partNo: string) => {
+    const handleSelectPart = async (partNo: string) => {
         setSelectedPart(partNo);
-        const plan = db.getActiveControlPlan(partNo);
+        const plan = await db.getActiveControlPlan(partNo);
         if (plan) {
             setActivePlan(plan);
             const pyItems = plan.items.filter(i => i.isPokaYoke && i.isActive);
@@ -71,7 +72,7 @@ export const PokaYokeModule: React.FC = () => {
         setEntryData({ ...entryData, verifications: newVerifications });
     };
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!entryData.machineNo) { alert("Enter Machine No"); return; }
         
         const record: PokaYokeRecord = {
@@ -86,20 +87,24 @@ export const PokaYokeModule: React.FC = () => {
             status: InspectionStatus.SUBMITTED
         };
 
-        db.savePokaYoke(record);
-        alert("Poka-Yoke Verification Submitted for Approval!");
-        setView('LIST');
-        refresh();
+        try {
+            await db.savePokaYoke(record);
+            alert("Poka-Yoke Verification Submitted for Approval!");
+            setView('LIST');
+            refresh();
+        } catch (e: any) {
+            alert(e.message);
+        }
     };
 
-    const handleView = (rec: PokaYokeRecord) => {
+    const handleView = async (rec: PokaYokeRecord) => {
         setViewingRecord(rec);
         setView('ENTRY');
         setEntryData(rec);
         setSelectedPart(rec.partNumber);
         
         // Load plan name for display
-        const plan = db.getControlPlanById(rec.controlPlanId);
+        const plan = await db.getControlPlanById(rec.controlPlanId);
         if(plan) setActivePlan(plan);
     };
 

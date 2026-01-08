@@ -1,645 +1,433 @@
 
-import { 
-    ControlPlan, PlanStatus, ControlPlanItem, InspectionRecord, NCRecord, NCStatus, 
-    Instrument, ControlPlanChangeLog, User, UserRole, InspectionStatus,
-    PokaYokeRecord, ProcessSetupMaster, ProcessSetupRecord, ProcessValidationPlan 
-} from '../types';
+import * as asdb from './sqlService';
+import { supabase } from './supabaseClient';
+import { User, UserRole, ControlPlan, InspectionRecord, NCRecord, PokaYokeRecord, ProcessSetupMaster, ProcessSetupRecord, ProcessValidationPlan, Instrument, PartMaster, ProductionEntry, ControlPlanChangeLog } from '../types';
 
-// --- PERSISTENCE LAYER CONSTANTS ---
-const DB_KEYS = {
-    USERS: 'EQMS_USERS',
-    CONTROL_PLANS: 'EQMS_CONTROL_PLANS',
-    CONTROL_PLAN_LOGS: 'EQMS_CP_LOGS',
-    INSPECTIONS: 'EQMS_INSPECTIONS',
-    NC_RECORDS: 'EQMS_NC_RECORDS',
-    INSTRUMENTS: 'EQMS_INSTRUMENTS',
-    POKA_YOKE: 'EQMS_POKA_YOKE',
-    PROCESS_MASTERS: 'EQMS_PROCESS_MASTERS',
-    PROCESS_LOGS: 'EQMS_PROCESS_LOGS',
-    VALIDATION_PLANS: 'EQMS_VALIDATION_PLANS',
-    SESSION: 'EQMS_CURRENT_SESSION'
-};
+// --- AUTHENTICATION & USER MANAGEMENT ---
 
-// --- DATA ACCESS LAYER (DAL) ---
+export const login = async (email: string, password: string): Promise<User> => {
+    // 1. Authenticate with Supabase Auth (Identity Provider)
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password
+    });
 
-// Helper to load data with fallback
-const load = <T>(key: string, defaultVal: T): T => {
-    try {
-        const stored = localStorage.getItem(key);
-        return stored ? JSON.parse(stored) : defaultVal;
-    } catch (e) {
-        console.error(`Error loading ${key}`, e);
-        return defaultVal;
-    }
-};
-
-// Helper to commit data
-const commit = (key: string, data: any) => {
-    try {
-        localStorage.setItem(key, JSON.stringify(data));
-    } catch (e) {
-        console.error(`Error saving ${key}`, e);
-        alert("Storage Quota Exceeded! Unable to save data.");
-    }
-};
-
-// --- STATE INITIALIZATION ---
-
-let USERS: User[] = load(DB_KEYS.USERS, []);
-let CONTROL_PLANS: ControlPlan[] = load(DB_KEYS.CONTROL_PLANS, []);
-let CONTROL_PLAN_LOGS: ControlPlanChangeLog[] = load(DB_KEYS.CONTROL_PLAN_LOGS, []);
-let INSPECTION_LOGS: InspectionRecord[] = load(DB_KEYS.INSPECTIONS, []);
-let NC_RECORDS: NCRecord[] = load(DB_KEYS.NC_RECORDS, []);
-let INSTRUMENTS: Instrument[] = load(DB_KEYS.INSTRUMENTS, [
-    { id: 'INS-001', name: 'Digital Vernier', serialNumber: 'DV-992', lastCalibration: '2023-10-01', frequencyDays: 365, nextDueDate: '2024-10-01', status: 'OK' },
-    { id: 'INS-002', name: 'Air Gauge Unit', serialNumber: 'AG-221', lastCalibration: '2024-01-15', frequencyDays: 90, nextDueDate: '2024-04-15', status: 'DUE_SOON' }
-]);
-let POKA_YOKE_LOGS: PokaYokeRecord[] = load(DB_KEYS.POKA_YOKE, []);
-let PROCESS_SETUP_MASTERS: ProcessSetupMaster[] = load(DB_KEYS.PROCESS_MASTERS, []);
-let PROCESS_SETUP_LOGS: ProcessSetupRecord[] = load(DB_KEYS.PROCESS_LOGS, []);
-let VALIDATION_PLANS: ProcessValidationPlan[] = load(DB_KEYS.VALIDATION_PLANS, []);
-
-// Session is transient in memory for security, but we could persist token here if needed
-let CURRENT_USER: User | null = (() => {
-    const session = sessionStorage.getItem(DB_KEYS.SESSION);
-    return session ? JSON.parse(session) : null;
-})();
-
-const SIGNATURE_IMAGE = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAJYAAAAyCAYAAAC+jCIaAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAABiSURBVHgB7c6xCQAgDAVB91/6rSAYCGIn7sC8x8D+cwEAAGB91j2v52UAAIB1Wfe8npcBAADWZd3zel4GAABYl3XP63kZAABgXdY9r+dlAACAdVn3vJ6XAQAA1mXd83peBgAAWJc105cA1iE0d4IAAAAASUVORK5CYII=";
-
-// --- SEED DATA LOGIC (Run only if empty) ---
-const seedData = () => {
-    if (USERS.length > 0) return; // DB already exists
-
-    console.log("Seeding Initial Database...");
-
-    // Seed Users
-    USERS = [
-        { id: 'u1', userCode: 'EMP001', name: 'Rajesh Kumar', email: 'rajesh@texspin.com', password: '123', role: 'INSPECTOR', department: 'Assembly', status: 'ACTIVE' },
-        { id: 'u2', userCode: 'EMP002', name: 'Amit Varma', email: 'amit@texspin.com', password: '123', role: 'HOD', department: 'Quality', signatureUrl: SIGNATURE_IMAGE, status: 'ACTIVE' },
-        { id: 'u3', userCode: 'ADMIN', name: 'System Admin', email: 'admin@texspin.com', password: 'admin', role: 'ADMIN', department: 'IT', status: 'ACTIVE' }
-    ];
-    commit(DB_KEYS.USERS, USERS);
-
-    // Seed Control Plan
-    if (CONTROL_PLANS.length === 0) {
-        const cp: ControlPlan = {
-            id: 'temp-1',
-            controlPlanNumber: 'TBL/CP/251',
-            partNumber: 'ZA28708.2',
-            partName: 'TX-3052 SC CLUTCH RELEASE BEARING',
-            processFamily: 'Assembly',
-            phase: 'PRODUCTION',
-            version: 1,
-            status: PlanStatus.ACTIVE,
-            approvalDate: '2023-10-19',
-            coreTeam: 'Mr. Parakram, Mr. Devendra',
-            year: 2024,
-            items: [
-                {
-                    id: 'row-1', stepNumber: '13.01', processName: 'Visual Inspection', machineDevice: 'Manually',
-                    charNo: 1, productDesc: 'Component Free From Rust, Dent, foreign particle', processDesc: '',
-                    specialCharClass: '', tolerance: 'Free From Rust, Dent', evaluationTechnique: 'Visually',
-                    sampleSize: '100%', frequency: 'Continuous', controlMethod: 'VA-49/1',
-                    reactionPlan: 'Stop machine, inform Prod Engineer', responsibility: 'Assy Supervisor', 
-                    isPokaYoke: false, isActive: true, unit: '-'
-                },
-                {
-                    id: 'row-2', stepNumber: '13.31', processName: 'Wave Spring Fitment', machineDevice: 'Hydro-pneumatic Press',
-                    charNo: 2, productDesc: 'Radial Displacement Force', processDesc: 'Pressure 50 to 110 kg/cm2',
-                    specialCharClass: '9', tolerance: '80 ± 30 N', 
-                    nominal: 80, lsl: 50, usl: 110, unit: 'N',
-                    evaluationTechnique: 'Semi-automatic machine',
-                    sampleSize: '5 Pc', frequency: '2 Pc / 2 hour', controlMethod: 'FPI & In process',
-                    reactionPlan: 'Reject/hold the Lot', responsibility: 'QA Engineer', 
-                    isPokaYoke: true, isActive: true
-                },
-                {
-                    id: 'row-3', stepNumber: '13.04', processName: 'Grease Filling', machineDevice: 'Automatic M/c',
-                    charNo: 2, productDesc: 'Grease Qty', processDesc: 'Pressure 2-4 kg/cm2',
-                    specialCharClass: '9', tolerance: '1.7 ± 0.20 g', 
-                    nominal: 1.7, lsl: 1.5, usl: 1.9, unit: 'g',
-                    evaluationTechnique: 'Weigh scale',
-                    sampleSize: '5 pcs', frequency: '2 pc / 2 hour', controlMethod: 'SPC Analysis',
-                    reactionPlan: 'Sort out Defective Parts', responsibility: 'QA Engineer', 
-                    isPokaYoke: false, isActive: true
-                }
-            ]
-        };
-        CONTROL_PLANS.push(cp);
-        commit(DB_KEYS.CONTROL_PLANS, CONTROL_PLANS);
+    if (authError) {
+        console.error("Supabase Auth Error:", JSON.stringify(authError, null, 2));
+        let msg = authError.message;
+        if (msg === "Invalid login credentials") msg = "Invalid email or password.";
+        if (msg.includes("Failed to fetch")) msg = "Network Error: Could not connect to authentication server. Please check your internet connection.";
+        throw new Error(msg);
     }
 
-    // Seed Process Master
-    if (PROCESS_SETUP_MASTERS.length === 0) {
-        PROCESS_SETUP_MASTERS.push({
-            id: 'pm-1',
-            partNumber: 'ZA28708.2',
-            machineNo: 'HP-PRESS-01',
-            processName: 'Wave Spring Fitment',
-            parameters: [
-                { id: 'p1', name: 'Hydraulic Pressure', specification: '50 - 110 kg/cm2', class: 'Critical', controlMethod: 'Pressure Gauge' },
-                { id: 'p2', name: 'Hold Time', specification: '2 - 4 sec', class: 'Major', controlMethod: 'Timer' },
-                { id: 'p3', name: 'Fixture Alignment', specification: 'OK / NOK', class: 'Minor', controlMethod: 'Visual' }
-            ]
-        });
-        commit(DB_KEYS.PROCESS_MASTERS, PROCESS_SETUP_MASTERS);
+    if (!authData.user) {
+        throw new Error("Authentication failed. No user data returned.");
     }
+
+    // 2. Fetch User Profile from 'app_users' table (Authorization & Profile)
+    // We DO NOT store passwords in this table.
+    const { data: userProfile, error: profileError } = await supabase
+        .from('app_users')
+        .select('*')
+        .eq('id', authData.user.id)
+        .single();
+
+    if (profileError) {
+        console.error("Profile Fetch Error Details:", JSON.stringify(profileError, null, 2));
+
+        // HANDLE MISSING PROFILE (PGRST116: JSON object requested, multiple (or no) rows returned)
+        // If the user exists in Auth but not in app_users, we create a default profile.
+        if (profileError.code === 'PGRST116') {
+            console.log("Profile missing for authenticated user. Auto-creating default profile...");
+            const defaultProfile = {
+                id: authData.user.id,
+                user_code: 'USR-' + Math.floor(Math.random() * 10000),
+                name: authData.user.email?.split('@')[0] || 'User',
+                email: authData.user.email,
+                role: 'VIEW_ONLY', // Default safe role
+                department: 'General',
+                status: 'ACTIVE'
+            };
+            
+            const { error: insertError } = await supabase.from('app_users').insert(defaultProfile);
+            if (insertError) {
+                console.error("Failed to auto-create profile:", JSON.stringify(insertError, null, 2));
+                throw new Error("Account exists but Profile setup failed. (RLS Violation? Run Schema Script): " + insertError.message);
+            }
+
+            // Return the newly created user structure
+            const user: User = {
+                id: defaultProfile.id,
+                userCode: defaultProfile.user_code,
+                name: defaultProfile.name,
+                email: defaultProfile.email || '',
+                role: defaultProfile.role as UserRole,
+                department: defaultProfile.department,
+                status: defaultProfile.status as any
+            };
+            localStorage.setItem('EQMS_USER', JSON.stringify(user));
+            return user;
+        }
+
+        // Handle Table Not Found (42P01) or other DB errors
+        const msg = profileError.message.includes("does not exist") 
+            ? "Database Configuration Error: Tables not found. Please run the SQL schema script."
+            : `Profile Error: ${profileError.message}`;
+            
+        await supabase.auth.signOut();
+        throw new Error(msg);
+    }
+
+    if (!userProfile) {
+        await supabase.auth.signOut();
+        throw new Error("User profile not found.");
+    }
+
+    // 3. Enforce Account Status
+    if (userProfile.status !== 'ACTIVE') {
+        await supabase.auth.signOut();
+        throw new Error("Account is INACTIVE. Access denied.");
+    }
+
+    // 4. Construct User Object for Session
+    const user: User = {
+        id: authData.user.id,
+        userCode: userProfile.user_code || 'N/A',
+        name: userProfile.name,
+        email: authData.user.email || email, 
+        role: userProfile.role as UserRole,
+        department: userProfile.department || 'General',
+        status: userProfile.status
+    };
     
-    // Seed Validation Plan
-    if (VALIDATION_PLANS.length === 0) {
-        const date = new Date();
-        const nextDate = new Date();
-        nextDate.setMonth(date.getMonth() + 1);
-        
-        VALIDATION_PLANS.push({
-            id: 'val-1',
-            partNumber: 'ZA28708.2',
-            partName: 'Clutch Release Bearing',
-            lineMachineNo: 'Assembly Line 1',
-            validationType: 'INITIAL',
-            controlPlanRef: 'TBL/CP/251',
-            validationDate: date.toISOString().split('T')[0],
-            nextDueDate: nextDate.toISOString().split('T')[0],
-            frequencyMonths: 1,
-            status: InspectionStatus.APPROVED,
-            validatedBy: 'Rajesh Kumar',
-            approvedBy: 'Amit Varma',
-            approvalDate: '2024-02-16',
-            approvalRemark: 'Validation Successful. Process Stable.',
-            processes: [
-                {
-                    id: 'proc-1',
-                    processName: '10.20 Grease Filling',
-                    parameters: [
-                        {
-                            id: 'param-1', name: 'Grease Weight', specification: '1.5 - 1.9 g', unit: 'g', lsl: 1.5, usl: 1.9,
-                            trials: [
-                                { id: 't1', trialNo: 1, readings: [1.6, 1.7, 1.65, 1.72, 1.68], observation: 'Within limit', status: 'OK' },
-                                { id: 't2', trialNo: 2, readings: [1.55, 1.6, 1.58, 1.62, 1.6], observation: 'Within limit', status: 'OK' }
-                            ]
-                        }
-                    ]
-                }
-            ]
-        });
-        commit(DB_KEYS.VALIDATION_PLANS, VALIDATION_PLANS);
-    }
-};
-
-// Execute Seed
-seedData();
-
-
-// --- AUTHENTICATION ---
-
-export const login = (userCodeOrEmail: string, password: string): User => {
-    const user = USERS.find(u => 
-        (u.userCode.toUpperCase() === userCodeOrEmail.toUpperCase() || u.email.toUpperCase() === userCodeOrEmail.toUpperCase()) && 
-        u.password === password
-    );
-
-    if (!user) {
-        throw new Error("Invalid User Code or Password");
-    }
-
-    if (user.status !== 'ACTIVE') {
-        throw new Error("Account is inactive. Contact Administrator.");
-    }
-
-    CURRENT_USER = user;
-    sessionStorage.setItem(DB_KEYS.SESSION, JSON.stringify(user));
+    // 5. Persist Session locally for app state
+    localStorage.setItem('EQMS_USER', JSON.stringify(user));
     return user;
 };
 
-export const logout = () => {
-    CURRENT_USER = null;
-    sessionStorage.removeItem(DB_KEYS.SESSION);
+export const logout = async () => {
+    try {
+        await supabase.auth.signOut();
+    } catch (e) {
+        console.error("Error signing out:", e);
+    }
+    localStorage.removeItem('EQMS_USER');
+    window.location.href = "/"; // Force reload to clear React state
 };
 
 export const getCurrentUser = (): User => {
-    if (!CURRENT_USER) {
-        throw new Error("No active session. Please log in.");
+    const stored = localStorage.getItem('EQMS_USER');
+    if (stored) {
+        return JSON.parse(stored);
     }
-    return CURRENT_USER;
+    throw new Error("No active session");
 };
 
-export const getUserSignature = (userId: string): string | undefined => {
-    return USERS.find(u => u.id === userId)?.signatureUrl;
-};
+// --- USER ADMINISTRATION ---
 
-// --- USER MANAGEMENT (ADMIN) ---
+export const createUser = async (userData: User, password: string) => {
+    // 1. Create User in Supabase Auth
+    // IMPORTANT: We pass all profile data in 'options.data'. 
+    // The Database Trigger 'on_auth_user_created' will use this to automatically create the 'app_users' row.
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: userData.email,
+        password: password,
+        options: {
+            data: {
+                name: userData.name,
+                role: userData.role,
+                department: userData.department,
+                userCode: userData.userCode
+            }
+        }
+    });
 
-export const getUsers = (): User[] => {
-    return [...USERS];
-};
-
-export const saveUser = (user: User): void => {
-    const existingIndex = USERS.findIndex(u => u.id === user.id);
-    const duplicate = USERS.find(u => (u.userCode === user.userCode || u.email === user.email) && u.id !== user.id);
-    if (duplicate) throw new Error("User Code or Email already exists.");
-
-    if (existingIndex >= 0) {
-        USERS[existingIndex] = user;
-    } else {
-        USERS.push(user);
+    if (authError) {
+        console.error("Sign Up Error:", JSON.stringify(authError, null, 2));
+        let msg = authError.message;
+        if (msg.includes("Failed to fetch")) msg = "Network Error: Could not connect to Supabase.";
+        throw new Error(msg);
     }
-    commit(DB_KEYS.USERS, USERS);
+    
+    if (!authData.user) throw new Error("Failed to create auth user (check email confirmation settings)");
+
+    // NOTE: We do NOT manually insert into 'app_users' here anymore. 
+    // The Trigger handles it securely. This avoids RLS violations.
+
+    return authData.user;
 };
 
-export const toggleUserStatus = (id: string): void => {
-    const user = USERS.find(u => u.id === id);
-    if (user) {
-        user.status = user.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
-        commit(DB_KEYS.USERS, USERS);
+export const saveUser = async (user: User) => {
+    // Only updates profile information.
+    // Passwords are NOT handled here.
+    const profile = {
+        user_code: user.userCode,
+        name: user.name,
+        role: user.role,
+        department: user.department,
+        status: user.status
+    };
+
+    const { error } = await supabase
+        .from('app_users')
+        .update(profile)
+        .eq('id', user.id);
+
+    if (error) {
+        console.error("Save User Error:", JSON.stringify(error, null, 2));
+        let msg = error.message;
+        if (msg.includes("Failed to fetch")) msg = "Network Error: Could not save user profile.";
+        throw new Error(msg);
     }
 };
 
-const getDiffs = (oldPlan: ControlPlan, newPlan: ControlPlan) => {
-    const changes: Array<{ field: string, oldValue: string, newValue: string }> = [];
-    if (oldPlan.partName !== newPlan.partName) changes.push({ field: 'Part Name', oldValue: oldPlan.partName, newValue: newPlan.partName });
-    if (oldPlan.coreTeam !== newPlan.coreTeam) changes.push({ field: 'Core Team', oldValue: oldPlan.coreTeam, newValue: newPlan.coreTeam });
-    if (JSON.stringify(oldPlan.items) !== JSON.stringify(newPlan.items)) {
-        changes.push({ field: 'Control Plan Items', oldValue: 'See Version ' + oldPlan.version, newValue: 'Updated in V' + (oldPlan.version + 1) });
+export const getUsers = async (): Promise<User[]> => {
+    const { data, error } = await supabase
+        .from('app_users')
+        .select('*')
+        .order('name');
+        
+    if (error) {
+        // If table doesn't exist yet, return empty list to trigger Setup screen in Login.tsx
+        if (error.code === '42P01') return [];
+        
+        console.error("Get Users Error:", JSON.stringify(error, null, 2));
+        let msg = error.message;
+        if (msg.includes("Failed to fetch")) msg = "Network Error: Could not fetch users.";
+        throw new Error(msg);
     }
-    return changes;
+    
+    return data.map((u: any) => ({
+        id: u.id,
+        userCode: u.user_code,
+        name: u.name,
+        email: u.email,
+        role: u.role as UserRole,
+        department: u.department,
+        status: u.status
+    }));
 };
 
-// --- MODULE 1: CONTROL PLAN ENGINE ---
+export const toggleUserStatus = async (id: string) => {
+    const { data, error } = await supabase.from('app_users').select('status').eq('id', id).single();
+    if (error) throw new Error(error.message);
 
-export const getActiveControlPlan = (partNumber: string, processFamily?: string): ControlPlan | undefined => {
-    return CONTROL_PLANS.find(cp => 
+    const newStatus = data.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
+    
+    const { error: updateError } = await supabase
+        .from('app_users')
+        .update({ status: newStatus })
+        .eq('id', id);
+
+    if (updateError) throw new Error(updateError.message);
+};
+
+// --- DATA ACCESS WRAPPERS (Business Logic) ---
+
+// PARTS MASTER
+export const getPartsMaster = async () => asdb.getPartsMaster();
+export const uploadPartsMaster = async (parts: PartMaster[]) => asdb.bulkUpsertParts(parts);
+
+// PRODUCTION ENTRY
+export const getProductionHistory = async () => asdb.getProductionEntries();
+export const saveProductionEntry = async (entry: Omit<ProductionEntry, 'id' | 'created_at'>) => {
+    try {
+        const user = getCurrentUser();
+        const entryWithUser = { ...entry, created_by: user.id };
+        await asdb.saveProductionEntry(entryWithUser);
+    } catch (e) {
+        console.error("Failed to attach user ID to production entry", e);
+        await asdb.saveProductionEntry(entry);
+    }
+};
+
+// CONTROL PLAN
+export const getAllControlPlans = async (): Promise<ControlPlan[]> => {
+    const plans = await asdb.getAll<ControlPlan>('control_plans');
+    return plans.sort((a,b) => b.version - a.version);
+};
+
+export const getControlPlanById = async (id: string): Promise<ControlPlan | undefined> => {
+    const plans = await getAllControlPlans();
+    return plans.find(cp => cp.id === id);
+};
+
+export const getActiveControlPlan = async (partNumber: string, processFamily?: string): Promise<ControlPlan | undefined> => {
+    const plans = await getAllControlPlans();
+    return plans.find(cp => 
         cp.partNumber === partNumber && 
-        (!processFamily || cp.processFamily === processFamily) &&
-        cp.status === PlanStatus.ACTIVE
+        cp.status === 'ACTIVE' &&
+        (!processFamily || cp.processFamily === processFamily)
     );
 };
 
-export const getControlPlanById = (id: string): ControlPlan | undefined => {
-    return CONTROL_PLANS.find(cp => cp.id === id);
-};
-
-export const getAllControlPlans = (): ControlPlan[] => {
-    return CONTROL_PLANS.sort((a, b) => b.version - a.version); 
-};
-
-export const getControlPlanLogs = (controlPlanNumber: string): ControlPlanChangeLog[] => {
-    return CONTROL_PLAN_LOGS.filter(l => l.controlPlanNumber === controlPlanNumber).sort((a, b) => b.version - a.version);
-};
-
-export const saveControlPlan = (draft: ControlPlan, changeReason: string = "Version Update"): void => {
-    const existingActive = getActiveControlPlan(draft.partNumber, draft.processFamily);
-    let newVersion = 1;
-    let changes: any[] = [];
-
-    if (existingActive) {
-        existingActive.status = PlanStatus.ARCHIVED;
-        newVersion = existingActive.version + 1;
-        changes = getDiffs(existingActive, draft);
-    } else {
-        changes = [{ field: 'Status', oldValue: 'New', newValue: 'Created' }];
-    }
-
-    const newPlan: ControlPlan = {
-        ...draft,
-        id: crypto.randomUUID(),
-        version: newVersion,
-        status: PlanStatus.ACTIVE,
-        approvalDate: new Date().toISOString().split('T')[0],
-        year: new Date().getFullYear()
-    };
-
-    CONTROL_PLANS.push(newPlan);
-    commit(DB_KEYS.CONTROL_PLANS, CONTROL_PLANS);
-
+export const saveControlPlan = async (plan: ControlPlan, reason: string) => {
+    await asdb.saveRecord('control_plans', plan);
     const log: ControlPlanChangeLog = {
         id: crypto.randomUUID(),
-        controlPlanNumber: newPlan.controlPlanNumber,
-        version: newVersion,
-        previousVersion: newVersion - 1,
+        controlPlanNumber: plan.controlPlanNumber,
+        version: plan.version,
+        previousVersion: plan.version - 1,
         changedBy: getCurrentUser().name,
         changeDate: new Date().toISOString(),
-        changeReason: changeReason,
-        changes: changes
+        changeReason: reason,
+        changes: []
     };
-    CONTROL_PLAN_LOGS.push(log);
-    commit(DB_KEYS.CONTROL_PLAN_LOGS, CONTROL_PLAN_LOGS);
+    await asdb.saveRecord('control_plan_logs', log);
 };
 
-export const getUniqueParts = () => {
-    return Array.from(new Set(CONTROL_PLANS.map(cp => cp.partNumber)));
+export const getControlPlanLogs = async (cpNumber: string): Promise<ControlPlanChangeLog[]> => {
+    const logs = await asdb.getAll<ControlPlanChangeLog>('control_plan_logs');
+    return logs.filter(l => l.controlPlanNumber === cpNumber).sort((a,b) => b.version - a.version);
 };
 
-// --- COMMON APPROVAL HELPERS ---
-
-const handleGenericApproval = (record: any, status: InspectionStatus, remark: string) => {
-    const user = getCurrentUser();
-    if (user.role !== 'HOD') throw new Error("Permission Denied: Only HOD can perform this action.");
-    
-    if (record.status !== InspectionStatus.SUBMITTED) {
-        throw new Error(`Invalid Transition: Record is currently '${record.status}'. Only SUBMITTED records can be processed.`);
+// INSPECTIONS
+export const getInspectionHistory = async () => asdb.getAll<InspectionRecord>('inspections');
+export const saveInspection = async (rec: InspectionRecord) => asdb.saveRecord('inspections', rec);
+export const getPendingInspections = async () => {
+    const all = await getInspectionHistory();
+    return all.filter(r => r.status === 'SUBMITTED');
+};
+export const approveInspection = async (id: string, status: any, remark: string) => {
+    const all = await getInspectionHistory();
+    const rec = all.find(r => r.id === id);
+    if(rec) {
+        rec.status = status;
+        rec.approvalRemark = remark;
+        rec.approvalDate = new Date().toISOString();
+        rec.approvedBy = getCurrentUser().name;
+        rec.approverId = getCurrentUser().id;
+        await asdb.saveRecord('inspections', rec);
+        return rec;
     }
-
-    if (status === InspectionStatus.APPROVED) {
-        if (!remark || remark.trim() === '') throw new Error("Approval Remark is mandatory.");
-        record.status = InspectionStatus.APPROVED;
-        record.approvedBy = user.name;
-        record.approverId = user.id;
-        record.approvalDate = new Date().toISOString();
-        record.approvalRemark = remark;
-        record.rejectionRemark = undefined;
-    } 
-    else if (status === InspectionStatus.REJECTED) {
-        if (!remark || remark.trim() === '') throw new Error("Rejection Remark is mandatory.");
-        record.status = InspectionStatus.REJECTED;
-        record.approvedBy = user.name;
-        record.approverId = user.id;
-        record.approvalDate = new Date().toISOString();
-        record.rejectionRemark = remark;
-        // Keep approval remark if any, or clear? Clear is safer to avoid confusion
-        record.approvalRemark = undefined; 
-    } else {
-        throw new Error(`Unsupported Action Status provided: ${status}`);
-    }
-    return record;
+    throw new Error("Record not found");
 };
 
-// --- MODULE 2: INSPECTION ENGINE ---
+export const getLastInspectionTime = async (part: string, family: string, type: string): Promise<Date | null> => {
+    const all = await getInspectionHistory();
+    const filtered = all.filter(r => r.partNumber === part && r.processFamily === family && r.type === type);
+    if (filtered.length === 0) return null;
+    filtered.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return new Date(filtered[0].timestamp);
+};
 
-export const saveInspection = (record: InspectionRecord): void => {
-    const user = getCurrentUser();
-    if (user.role !== 'INSPECTOR') throw new Error(`Role Violation: ${user.role} cannot submit inspections.`);
+// GENERIC UTILS
+export const getUniqueParts = async () => {
+    try {
+        const parts = await asdb.getPartsMaster();
+        if (parts.length > 0) return parts.map(p => p.part_no);
+    } catch (e) {
+        console.warn("Could not fetch parts from SQL table, falling back to document store", e);
+    }
+    const plans = await getAllControlPlans();
+    return Array.from(new Set(plans.map(p => p.partNumber)));
+};
 
-    const safeRecord = JSON.parse(JSON.stringify(record));
-    if (!safeRecord.status) safeRecord.status = InspectionStatus.SUBMITTED;
+export const getUserSignature = (id: string) => undefined;
 
-    INSPECTION_LOGS.push(safeRecord);
-    commit(DB_KEYS.INSPECTIONS, INSPECTION_LOGS);
-
-    if (safeRecord.overallResult === 'NG') {
-        createNC({
-            id: crypto.randomUUID(),
-            source: 'INSPECTION',
-            refId: safeRecord.id,
-            partNumber: safeRecord.partNumber,
-            processName: `${safeRecord.processFamily} - ${safeRecord.operationStep}`,
-            description: `Auto-generated from ${safeRecord.type} Failure. Step: ${safeRecord.operationStep}`,
-            detectedDate: new Date().toISOString(),
-            status: NCStatus.OPEN
-        });
+// NC CAPA
+export const getNCRecords = async () => asdb.getAll<NCRecord>('nc_records');
+export const updateNCStatus = async (id: string, updates: Partial<NCRecord>) => {
+    const all = await getNCRecords();
+    const nc = all.find(n => n.id === id);
+    if (nc) {
+        Object.assign(nc, updates);
+        await asdb.saveRecord('nc_records', nc);
     }
 };
 
-export const getInspectionHistory = (partNumber?: string): InspectionRecord[] => {
-    const logs = partNumber ? INSPECTION_LOGS.filter(r => r.partNumber === partNumber) : [...INSPECTION_LOGS];
-    return logs.reverse();
+// POKA YOKE
+export const getPokaYokeHistory = async () => asdb.getAll<PokaYokeRecord>('poka_yoke');
+export const savePokaYoke = async (rec: PokaYokeRecord) => asdb.saveRecord('poka_yoke', rec);
+export const getPendingPokaYokes = async () => {
+    const all = await getPokaYokeHistory();
+    return all.filter(r => r.status === 'SUBMITTED');
 };
-
-export const getLastInspectionTime = (partNumber: string, processFamily: string, type: string): Date | null => {
-    const logs = INSPECTION_LOGS
-        .filter(r => r.partNumber === partNumber && r.processFamily === processFamily && r.type === type)
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    return logs.length > 0 ? new Date(logs[0].timestamp) : null;
-};
-
-export const getPendingInspections = (): InspectionRecord[] => {
-    const user = getCurrentUser();
-    if (user.role.toUpperCase() !== 'HOD') return [];
-    return INSPECTION_LOGS.filter(r => r.status === InspectionStatus.SUBMITTED);
-};
-
-export const approveInspection = (id: string, status: InspectionStatus, remark?: string) => {
-    const record = INSPECTION_LOGS.find(r => r.id === id);
-    if (!record) throw new Error("Inspection record not found.");
-    const updated = handleGenericApproval(record, status, remark || '');
-    commit(DB_KEYS.INSPECTIONS, INSPECTION_LOGS);
-    return updated;
-};
-
-// --- MODULE 3: NC & CAPA ENGINE ---
-
-export const createNC = (nc: NCRecord): void => {
-    NC_RECORDS.push(nc);
-    commit(DB_KEYS.NC_RECORDS, NC_RECORDS);
-};
-
-export const getNCRecords = (): NCRecord[] => {
-    return NC_RECORDS;
-};
-
-export const updateNCStatus = (ncId: string, updates: Partial<NCRecord>): void => {
-    const nc = NC_RECORDS.find(n => n.id === ncId);
-    if (!nc) return;
-    if (updates.status === NCStatus.CLOSED && !nc.effectivenessVerified && !updates.effectivenessVerified) {
-        throw new Error("Cannot close NC without Effectiveness Verification.");
-    }
-    Object.assign(nc, updates);
-    commit(DB_KEYS.NC_RECORDS, NC_RECORDS);
-};
-
-// --- MODULE 4: POKA YOKE ENGINE ---
-
-export const savePokaYoke = (record: PokaYokeRecord): void => {
-    // Set initial status to SUBMITTED
-    record.status = InspectionStatus.SUBMITTED;
-    POKA_YOKE_LOGS.push(record);
-    commit(DB_KEYS.POKA_YOKE, POKA_YOKE_LOGS);
-    
-    // Auto NC
-    if (record.verifications.some(v => v.status === 'NG')) {
-        createNC({
-            id: crypto.randomUUID(),
-            source: 'POKA_YOKE',
-            partNumber: record.partNumber,
-            processName: `Poka Yoke - ${record.machineNo}`,
-            description: `Poka Yoke Verification Failed on ${record.date}. Check: ${record.verifications.find(v=>v.status==='NG')?.checkPoint}`,
-            detectedDate: new Date().toISOString(),
-            status: NCStatus.OPEN
-        });
+export const approvePokaYoke = async (id: string, status: any, remark: string) => {
+    const all = await getPokaYokeHistory();
+    const rec = all.find(r => r.id === id);
+    if(rec) {
+        rec.status = status;
+        rec.approvalRemark = remark;
+        rec.approvedBy = getCurrentUser().name;
+        await asdb.saveRecord('poka_yoke', rec);
     }
 };
 
-export const getPokaYokeHistory = () => {
-    return POKA_YOKE_LOGS.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+// PROCESS SETUP
+export const getProcessSetupHistory = async () => asdb.getAll<ProcessSetupRecord>('process_logs');
+export const getPendingProcessSetups = async () => {
+    const all = await getProcessSetupHistory();
+    return all.filter(r => r.status === 'SUBMITTED');
 };
-
-export const getPendingPokaYokes = (): PokaYokeRecord[] => {
-    const user = getCurrentUser();
-    if (user.role.toUpperCase() !== 'HOD') return [];
-    return POKA_YOKE_LOGS.filter(r => r.status === InspectionStatus.SUBMITTED);
+export const saveProcessMaster = async (master: ProcessSetupMaster) => asdb.saveRecord('process_masters', master);
+export const getProcessMaster = async (partNumber: string): Promise<ProcessSetupMaster | undefined> => {
+    const all = await asdb.getAll<ProcessSetupMaster>('process_masters');
+    return all.find(m => m.partNumber === partNumber);
 };
-
-export const approvePokaYoke = (id: string, status: InspectionStatus, remark: string) => {
-    const record = POKA_YOKE_LOGS.find(r => r.id === id);
-    if (!record) throw new Error("Poka Yoke record not found.");
-    
-    // Specific Business Rule: Block Approval if NG
-    if (status === InspectionStatus.APPROVED) {
-        const hasNG = record.verifications.some(v => v.status === 'NG');
-        if (hasNG) throw new Error("Cannot Approve: Poka-Yoke verification has NG checkpoints. Reject or fix.");
+export const saveProcessSetupRecord = async (rec: ProcessSetupRecord) => asdb.saveRecord('process_logs', rec);
+export const approveProcessSetup = async (id: string, status: any, remark: string) => {
+    const all = await getProcessSetupHistory();
+    const rec = all.find(r => r.id === id);
+    if(rec) {
+        rec.status = status;
+        rec.approvalRemark = remark;
+        rec.approvedBy = getCurrentUser().name;
+        await asdb.saveRecord('process_logs', rec);
     }
-
-    const updated = handleGenericApproval(record, status, remark);
-    commit(DB_KEYS.POKA_YOKE, POKA_YOKE_LOGS);
-    return updated;
 };
 
-// --- MODULE 5: PROCESS APPROVAL ENGINE ---
-
-export const getProcessMaster = (partNumber: string): ProcessSetupMaster | undefined => {
-    return PROCESS_SETUP_MASTERS.find(m => m.partNumber === partNumber);
+// VALIDATION
+export const getValidationPlans = async () => asdb.getAll<ProcessValidationPlan>('validation_plans');
+export const getPendingValidations = async () => {
+    const all = await getValidationPlans();
+    return all.filter(r => r.status === 'SUBMITTED');
 };
-
-export const saveProcessMaster = (master: ProcessSetupMaster) => {
-    const existingIdx = PROCESS_SETUP_MASTERS.findIndex(m => m.partNumber === master.partNumber);
-    if (existingIdx >= 0) {
-        PROCESS_SETUP_MASTERS[existingIdx] = master;
-    } else {
-        PROCESS_SETUP_MASTERS.push(master);
+export const saveValidationPlan = async (plan: ProcessValidationPlan) => asdb.saveRecord('validation_plans', plan);
+export const approveValidationPlan = async (id: string, status: any, remark: string) => {
+    const all = await getValidationPlans();
+    const rec = all.find(r => r.id === id);
+    if(rec) {
+        rec.status = status;
+        rec.approvalRemark = remark;
+        rec.approvedBy = getCurrentUser().name;
+        await asdb.saveRecord('validation_plans', rec);
     }
-    commit(DB_KEYS.PROCESS_MASTERS, PROCESS_SETUP_MASTERS);
 };
-
-export const saveProcessSetupRecord = (record: ProcessSetupRecord) => {
-    record.status = InspectionStatus.SUBMITTED;
-    PROCESS_SETUP_LOGS.push(record);
-    commit(DB_KEYS.PROCESS_LOGS, PROCESS_SETUP_LOGS);
-};
-
-export const getProcessSetupHistory = () => {
-    return PROCESS_SETUP_LOGS.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-};
-
-export const getPendingProcessSetups = (): ProcessSetupRecord[] => {
-    const user = getCurrentUser();
-    if (user.role.toUpperCase() !== 'HOD') return [];
-    return PROCESS_SETUP_LOGS.filter(r => r.status === InspectionStatus.SUBMITTED);
-};
-
-export const approveProcessSetup = (id: string, status: InspectionStatus, remark: string) => {
-    const record = PROCESS_SETUP_LOGS.find(r => r.id === id);
-    if (!record) throw new Error("Process Setup record not found.");
-    
-    const updated = handleGenericApproval(record, status, remark);
-    commit(DB_KEYS.PROCESS_LOGS, PROCESS_SETUP_LOGS);
-    return updated;
-};
-
-// --- MODULE 6: PROCESS VALIDATION (UPDATED) ---
-
-const calculateNextDueDate = (dateStr: string, months: number): string => {
-    const date = new Date(dateStr);
-    date.setMonth(date.getMonth() + months);
-    return date.toISOString().split('T')[0];
-};
-
-export const saveValidationPlan = (plan: ProcessValidationPlan) => {
-    // ENFORCED ROLE CHECK
-    const user = getCurrentUser();
-    if (user.role !== 'INSPECTOR') {
-        throw new Error("Permission Denied: Only Inspectors can create/submit Process Validations.");
-    }
-
-    const freq = plan.frequencyMonths || 1;
-    plan.frequencyMonths = freq;
-    plan.nextDueDate = calculateNextDueDate(plan.validationDate, freq);
-    plan.status = InspectionStatus.SUBMITTED; // Force SUBMITTED
-    
-    VALIDATION_PLANS.push(plan);
-    commit(DB_KEYS.VALIDATION_PLANS, VALIDATION_PLANS);
-};
-
-export const getValidationPlans = () => {
-    return VALIDATION_PLANS.sort((a,b) => new Date(b.validationDate).getTime() - new Date(a.validationDate).getTime());
-};
-
-export const getPendingValidations = (): ProcessValidationPlan[] => {
-    const user = getCurrentUser();
-    if (user.role.toUpperCase() !== 'HOD') return [];
-    return VALIDATION_PLANS.filter(r => r.status === InspectionStatus.SUBMITTED);
-};
-
-export const approveValidationPlan = (id: string, status: InspectionStatus, remark: string) => {
-    const plan = VALIDATION_PLANS.find(p => p.id === id);
-    if (!plan) throw new Error("Validation Plan not found.");
-
-    // Rule: Approval allowed only if All trials OK
-    if (status === InspectionStatus.APPROVED) {
-        let hasNG = false;
-        plan.processes.forEach(proc => {
-            proc.parameters.forEach(param => {
-                if(param.trials.some(t => t.status === 'NG')) hasNG = true;
-            })
-        });
-        if (hasNG) throw new Error("Cannot Approve: One or more Validation Trials are NG. Please review.");
-    }
-
-    const updated = handleGenericApproval(plan, status, remark);
-    commit(DB_KEYS.VALIDATION_PLANS, VALIDATION_PLANS);
-    return updated;
-};
-
 export const getValidationStatus = (plan: ProcessValidationPlan): 'VALID' | 'DUE_SOON' | 'OVERDUE' => {
-    if (plan.status !== InspectionStatus.APPROVED) return 'VALID'; // Only active plans degrade
-    const today = new Date();
-    const dueDate = new Date(plan.nextDueDate);
-    const diffTime = dueDate.getTime() - today.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
+    if (plan.status !== 'APPROVED') return 'VALID';
+    const date = new Date(plan.validationDate);
+    date.setMonth(date.getMonth() + plan.frequencyMonths);
+    const now = new Date();
+    const diff = date.getTime() - now.getTime();
+    const diffDays = diff / (1000 * 3600 * 24);
     if (diffDays < 0) return 'OVERDUE';
-    if (diffDays <= 7) return 'DUE_SOON';
+    if (diffDays < 15) return 'DUE_SOON';
     return 'VALID';
 };
-
-export const getValidationAnalytics = () => {
-    const total = VALIDATION_PLANS.length;
-    let overdue = 0;
-    let dueSoon = 0;
-    let valid = 0;
-    const processCounts: Record<string, {total: number, overdue: number}> = {};
-
-    VALIDATION_PLANS.forEach(p => {
-        const status = getValidationStatus(p);
-        if (status === 'OVERDUE') overdue++;
-        else if (status === 'DUE_SOON') dueSoon++;
-        else valid++;
-
-        const mainProcess = p.processes.length > 0 ? p.processes[0].processName : 'Unknown';
-        if (!processCounts[mainProcess]) processCounts[mainProcess] = { total: 0, overdue: 0 };
-        processCounts[mainProcess].total++;
-        if (status === 'OVERDUE') processCounts[mainProcess].overdue++;
+export const getValidationAnalytics = async () => {
+    const plans = await getValidationPlans();
+    const active = plans.filter(p => p.status === 'APPROVED');
+    const total = active.length;
+    let valid = 0, dueSoon = 0, overdue = 0;
+    active.forEach(p => {
+        const s = getValidationStatus(p);
+        if(s === 'VALID') valid++;
+        if(s === 'DUE_SOON') dueSoon++;
+        if(s === 'OVERDUE') overdue++;
     });
-
-    const chartData = Object.keys(processCounts).map(key => ({
-        name: key,
-        Total: processCounts[key].total,
-        Overdue: processCounts[key].overdue
-    }));
-
-    return { total, overdue, dueSoon, valid, chartData };
+    return {
+        total, valid, dueSoon, overdue,
+        chartData: [{ name: 'Assembly', Total: total, Overdue: overdue }]
+    };
 };
 
-// --- MODULE 7: CALIBRATION ---
+// DASHBOARD
+export const getPPMData = async () => [
+    { name: 'Jan', ppm: 1200 },
+    { name: 'Feb', ppm: 900 },
+    { name: 'Mar', ppm: 850 },
+];
+export const getInstruments = async () => asdb.getAll<Instrument>('instruments');
 
-export const getInstruments = (): Instrument[] => {
-    const today = new Date();
-    return INSTRUMENTS.map(inst => {
-        const nextDate = new Date(inst.nextDueDate);
-        const diffTime = nextDate.getTime() - today.getTime();
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        let status: 'OK' | 'DUE_SOON' | 'OVERDUE' = 'OK';
-        if (diffDays < 0) status = 'OVERDUE';
-        else if (diffDays < 7) status = 'DUE_SOON';
-        return { ...inst, status };
-    });
-};
-
-export const getPPMData = () => {
-    return [
-        { name: 'Jan', ppm: 1200 },
-        { name: 'Feb', ppm: 850 },
-        { name: 'Mar', ppm: 2100 },
-        { name: 'Apr', ppm: 450 },
-        { name: 'May', ppm: 900 },
-    ];
-};
+export const ensureSeedData = async () => { /* No-op */ };

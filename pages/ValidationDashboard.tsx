@@ -1,11 +1,17 @@
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import * as db from '../services/mockBackend';
 import { CheckCircle, AlertOctagon, Clock, Activity } from 'lucide-react';
 
 export const ValidationDashboard: React.FC = () => {
-    const stats = db.getValidationAnalytics();
+    const [stats, setStats] = useState<any>(null);
+
+    useEffect(() => {
+        db.getValidationAnalytics().then(setStats);
+    }, []);
+
+    if (!stats) return <div className="p-8 text-center text-gray-500">Loading Analytics...</div>;
     
     // Data for Pie Chart
     const statusData = [
@@ -104,7 +110,7 @@ export const ValidationDashboard: React.FC = () => {
                                     paddingAngle={5}
                                     dataKey="value"
                                 >
-                                    {statusData.map((entry, index) => (
+                                    {statusData.map((entry: any, index: number) => (
                                         <Cell key={`cell-${index}`} fill={entry.color} />
                                     ))}
                                 </Pie>

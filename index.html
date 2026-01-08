@@ -7,6 +7,8 @@
     <title>TEXSPIN e-QMS</title>
     <!-- Keeping Tailwind CDN for simplicity in this migration -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- SQL.js for Persistent SQL Storage -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
   <script type="importmap">
 {
   "imports": {
@@ -18,7 +20,15 @@
     "jspdf-autotable": "https://esm.sh/jspdf-autotable@^5.0.2",
     "jspdf": "https://esm.sh/jspdf@^3.0.4",
     "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
-    "vite": "https://esm.sh/vite@^7.3.0"
+    "vite": "https://esm.sh/vite@^7.3.0",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.7",
+    "cors": "https://esm.sh/cors@^2.8.5",
+    "express": "https://esm.sh/express@^5.2.1",
+    "url": "https://esm.sh/url@^0.11.4",
+    "better-sqlite3": "https://esm.sh/better-sqlite3@^12.5.0",
+    "path": "https://esm.sh/path@^0.12.7",
+    "fs": "https://esm.sh/fs@^0.0.1-security",
+    "xlsx": "https://esm.sh/xlsx@^0.18.5"
   }
 }
 </script>

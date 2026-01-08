@@ -20,6 +20,7 @@ export const InspectionModule: React.FC = () => {
 
     // Selection State
     const [partNo, setPartNo] = useState('');
+    const [partList, setPartList] = useState<string[]>([]);
     const [processFamily, setProcessFamily] = useState('Assembly');
     const [activePlan, setActivePlan] = useState<ControlPlan | null>(null);
     const [inspectionType, setInspectionType] = useState<'PATROL' | 'FIRST_PART' | 'PRE_DISPATCH'>('PATROL');
@@ -51,40 +52,47 @@ export const InspectionModule: React.FC = () => {
 
     // Initial Load
     useEffect(() => {
-        const parts = db.getUniqueParts();
-        if (parts.length > 0) setPartNo(parts[0]);
-        refreshData();
+        const init = async () => {
+            const parts = await db.getUniqueParts();
+            setPartList(parts);
+            if (parts.length > 0) setPartNo(parts[0]);
+            refreshData();
+        };
+        init();
     }, [currentUser]);
 
-    const refreshData = () => {
-        setHistory(db.getInspectionHistory());
+    const refreshData = async () => {
+        setHistory(await db.getInspectionHistory());
         if (currentUser.role === 'HOD') {
-            setPendingApprovals(db.getPendingInspections());
+            setPendingApprovals(await db.getPendingInspections());
         }
     };
 
     // Check Patrolling Status
     useEffect(() => {
-        if (partNo && processFamily && inspectionType === 'PATROL') {
-            const lastTime = db.getLastInspectionTime(partNo, processFamily, 'PATROL');
-            if (lastTime) {
-                const diffMs = new Date().getTime() - lastTime.getTime();
-                const diffHours = diffMs / (1000 * 60 * 60);
-                if (diffHours >= 2) {
-                    setPatrollingAlert(`Patrolling Inspection Due! Last inspection was ${diffHours.toFixed(1)} hours ago.`);
+        const checkPatrol = async () => {
+            if (partNo && processFamily && inspectionType === 'PATROL') {
+                const lastTime = await db.getLastInspectionTime(partNo, processFamily, 'PATROL');
+                if (lastTime) {
+                    const diffMs = new Date().getTime() - lastTime.getTime();
+                    const diffHours = diffMs / (1000 * 60 * 60);
+                    if (diffHours >= 2) {
+                        setPatrollingAlert(`Patrolling Inspection Due! Last inspection was ${diffHours.toFixed(1)} hours ago.`);
+                    } else {
+                        setPatrollingAlert(null);
+                    }
                 } else {
-                    setPatrollingAlert(null);
+                    setPatrollingAlert("First Patrolling Inspection Required.");
                 }
             } else {
-                 setPatrollingAlert("First Patrolling Inspection Required.");
+                setPatrollingAlert(null);
             }
-        } else {
-            setPatrollingAlert(null);
-        }
+        };
+        checkPatrol();
     }, [partNo, processFamily, inspectionType]);
 
-    const handleLoadPlan = () => {
-        const plan = db.getActiveControlPlan(partNo, processFamily);
+    const handleLoadPlan = async () => {
+        const plan = await db.getActiveControlPlan(partNo, processFamily);
         if (plan) {
             setActivePlan(plan);
             
@@ -116,8 +124,8 @@ export const InspectionModule: React.FC = () => {
         }
     };
 
-    const handleViewRecord = (record: InspectionRecord) => {
-        const plan = db.getControlPlanById(record.controlPlanId);
+    const handleViewRecord = async (record: InspectionRecord) => {
+        const plan = await db.getControlPlanById(record.controlPlanId);
         if (plan) {
             setActivePlan(plan);
             const activeItems = plan.items
@@ -133,8 +141,8 @@ export const InspectionModule: React.FC = () => {
         }
     };
 
-    const handleDownloadReport = (record: InspectionRecord) => {
-        const plan = db.getControlPlanById(record.controlPlanId);
+    const handleDownloadReport = async (record: InspectionRecord) => {
+        const plan = await db.getControlPlanById(record.controlPlanId);
         if (plan) {
             generateInspectionPDF(record, plan);
         } else {
@@ -197,10 +205,10 @@ export const InspectionModule: React.FC = () => {
          setReadings(prev => ({ ...prev, [itemId]: { ...prev[itemId], remark: text } }));
     };
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (viewingRecord) return;
         if (!activePlan) return;
-        if (currentUser.role !== 'INSPECTOR') return; // Enforce Role
+        if (currentUser.role !== 'INSPECTOR') return;
 
         for (const item of filteredItems) {
             const r = readings[item.id];
@@ -224,7 +232,7 @@ export const InspectionModule: React.FC = () => {
             operationStep: "Full Process",
             type: inspectionType,
             inspectorName: currentUser.name,
-            inspectorId: currentUser.id, // Traceability Binding
+            inspectorId: currentUser.id,
             timestamp: new Date().toISOString(),
             readings: readings,
             overallResult: overallResult,
@@ -232,21 +240,23 @@ export const InspectionModule: React.FC = () => {
             status: InspectionStatus.SUBMITTED
         };
 
+        setIsProcessing(true);
         try {
-            db.saveInspection(record);
+            await db.saveInspection(record);
             setSubmittedRecord(record); 
             refreshData();
         } catch (e: any) {
             alert(e.message);
+        } finally {
+            setIsProcessing(false);
         }
     };
 
     // --- APPROVAL WORKFLOW HANDLERS ---
 
     const handleApproveClick = (record: InspectionRecord) => {
-        // Prepare Modal
         setSelectedForAction(record);
-        setApprovalRemark(''); // Clear previous
+        setApprovalRemark('');
         setShowApproveModal(true);
     };
 
@@ -260,17 +270,13 @@ export const InspectionModule: React.FC = () => {
 
         setIsProcessing(true);
         try {
-            // Explicit call with Remark
-            const updatedRecord = db.approveInspection(selectedForAction.id, InspectionStatus.APPROVED, approvalRemark);
+            const updatedRecord = await db.approveInspection(selectedForAction.id, InspectionStatus.APPROVED, approvalRemark);
             
-            // Immediate feedback
             alert("✓ Success! Inspection Approved.");
             setShowApproveModal(false);
             
-            // Refresh List (removes the item from Pending)
             refreshData();
             
-            // If the user was viewing this record, update the view to show new status (Approved)
             if(viewingRecord?.id === selectedForAction.id) {
                 setViewingRecord(updatedRecord);
             }
@@ -289,7 +295,7 @@ export const InspectionModule: React.FC = () => {
         setShowRejectModal(true);
     };
 
-    const submitRejection = () => {
+    const submitRejection = async () => {
         if (!selectedForAction) return;
         
         if (!rejectionRemark.trim()) {
@@ -299,14 +305,12 @@ export const InspectionModule: React.FC = () => {
 
         setIsProcessing(true);
         try {
-            const updatedRecord = db.approveInspection(selectedForAction.id, InspectionStatus.REJECTED, rejectionRemark);
+            const updatedRecord = await db.approveInspection(selectedForAction.id, InspectionStatus.REJECTED, rejectionRemark);
             alert("✓ Inspection Rejected.");
             setShowRejectModal(false);
             
-            // Refresh lists
             refreshData();
             
-            // Update view if open
             if(viewingRecord?.id === selectedForAction.id) {
                 setViewingRecord(updatedRecord);
             }
@@ -437,7 +441,7 @@ export const InspectionModule: React.FC = () => {
                         <div className="col-span-2">
                             <label className="block text-xs font-semibold text-gray-500 uppercase">Part Number</label>
                             <select value={partNo} onChange={e => setPartNo(e.target.value)} className="w-full mt-1 border p-2 rounded text-sm">
-                                {db.getUniqueParts().map(p => <option key={p} value={p}>{p}</option>)}
+                                {partList.map(p => <option key={p} value={p}>{p}</option>)}
                             </select>
                         </div>
                         <div className="col-span-1">
@@ -497,7 +501,6 @@ export const InspectionModule: React.FC = () => {
                                             <td className="p-2 align-middle text-center text-xs text-gray-500">
                                                 {item.unit ?? '-'}
                                             </td>
-                                            {/* Reading Cells - Split individually for clarity */}
                                             {[0,1,2,3,4].map(idx => (
                                                 <td key={idx} className="p-1 align-middle">
                                                     <input 
@@ -532,8 +535,8 @@ export const InspectionModule: React.FC = () => {
                 )}
                  {!viewingRecord && !submittedRecord && activePlan && currentUser.role === 'INSPECTOR' && (
                      <div className="p-4 bg-gray-50 border-t flex justify-end">
-                        <button onClick={handleSubmit} className="bg-blue-600 text-white px-8 py-3 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-2 shadow-lg">
-                            <Save className="w-5 h-5" /> Submit Inspection
+                        <button onClick={handleSubmit} disabled={isProcessing} className="bg-blue-600 text-white px-8 py-3 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-2 shadow-lg">
+                            {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />} Submit Inspection
                         </button>
                     </div>
                  )}

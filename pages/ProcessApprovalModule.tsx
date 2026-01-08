@@ -11,6 +11,10 @@ export const ProcessApprovalModule: React.FC = () => {
     const [history, setHistory] = useState<ProcessSetupRecord[]>([]);
     const [pending, setPending] = useState<ProcessSetupRecord[]>([]);
     
+    // Data States
+    const [partList, setPartList] = useState<string[]>([]);
+    const [mastersMap, setMastersMap] = useState<Record<string, ProcessSetupMaster>>({});
+
     // Auth
     const user = db.getCurrentUser();
     const isHod = user.role === 'HOD';
@@ -36,11 +40,21 @@ export const ProcessApprovalModule: React.FC = () => {
         refresh();
     }, [view]);
 
-    const refresh = () => {
-        setHistory(db.getProcessSetupHistory());
+    const refresh = async () => {
+        setHistory(await db.getProcessSetupHistory());
         if (isHod) {
-            setPending(db.getPendingProcessSetups());
+            setPending(await db.getPendingProcessSetups());
         }
+
+        // Fetch Parts and Masters for lookup
+        const parts = await db.getUniqueParts();
+        setPartList(parts);
+        const map: Record<string, ProcessSetupMaster> = {};
+        for(const p of parts) {
+             const m = await db.getProcessMaster(p);
+             if(m) map[m.id] = m;
+        }
+        setMastersMap(map);
     };
 
     // --- MASTER LOGIC ---
@@ -58,22 +72,26 @@ export const ProcessApprovalModule: React.FC = () => {
         setNewMaster({ ...newMaster, parameters: params });
     };
 
-    const saveMaster = () => {
+    const saveMaster = async () => {
         if (!newMaster.partNumber) return alert("Part Number required");
-        db.saveProcessMaster({
-            id: crypto.randomUUID(),
-            partNumber: newMaster.partNumber!,
-            machineNo: newMaster.machineNo || 'General',
-            processName: newMaster.processName || 'Standard',
-            parameters: newMaster.parameters || []
-        });
-        alert("Process Template Saved!");
-        setView('LIST');
+        try {
+            await db.saveProcessMaster({
+                id: crypto.randomUUID(),
+                partNumber: newMaster.partNumber!,
+                machineNo: newMaster.machineNo || 'General',
+                processName: newMaster.processName || 'Standard',
+                parameters: newMaster.parameters || []
+            });
+            alert("Process Template Saved!");
+            setView('LIST');
+        } catch (e: any) {
+            alert(e.message);
+        }
     };
 
     // --- ENTRY LOGIC ---
-    const initEntry = (partNo: string) => {
-        const master = db.getProcessMaster(partNo);
+    const initEntry = async (partNo: string) => {
+        const master = await db.getProcessMaster(partNo);
         if (master) {
             setSelectedMaster(master);
             setEntryData({
@@ -88,7 +106,7 @@ export const ProcessApprovalModule: React.FC = () => {
     };
 
     const handleView = (rec: ProcessSetupRecord) => {
-        const master = db.getUniqueParts().map(p => db.getProcessMaster(p)).find(m => m?.id === rec.masterId);
+        const master = mastersMap[rec.masterId];
         if (master) setSelectedMaster(master);
         setEntryData(rec);
         setViewingRecord(rec);
@@ -110,7 +128,7 @@ export const ProcessApprovalModule: React.FC = () => {
         }));
     };
 
-    const submitEntry = () => {
+    const submitEntry = async () => {
         if (!selectedMaster) return;
         const record: ProcessSetupRecord = {
             id: crypto.randomUUID(),
@@ -121,9 +139,13 @@ export const ProcessApprovalModule: React.FC = () => {
             status: InspectionStatus.SUBMITTED,
             readings: entryData.readings as any
         };
-        db.saveProcessSetupRecord(record);
-        alert("Process Setup Submitted for Approval!");
-        setView('LIST');
+        try {
+            await db.saveProcessSetupRecord(record);
+            alert("Process Setup Submitted for Approval!");
+            setView('LIST');
+        } catch (e: any) {
+            alert(e.message);
+        }
     };
 
     const handleApprovalAction = async (remark: string) => {
@@ -193,7 +215,7 @@ export const ProcessApprovalModule: React.FC = () => {
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                                 {history.map(rec => {
-                                    const master = db.getUniqueParts().map(p => db.getProcessMaster(p)).find(m => m?.id === rec.masterId);
+                                    const master = mastersMap[rec.masterId];
                                     return (
                                         <tr key={rec.id} className="hover:bg-gray-50">
                                             <td className="p-4">
@@ -294,7 +316,7 @@ export const ProcessApprovalModule: React.FC = () => {
                             <label className="font-bold text-sm">Select Part to Setup:</label>
                             <select className="border p-2 ml-2 rounded" onChange={e => initEntry(e.target.value)}>
                                 <option value="">-- Select --</option>
-                                {db.getUniqueParts().map(p => <option key={p} value={p}>{p}</option>)}
+                                {partList.map(p => <option key={p} value={p}>{p}</option>)}
                             </select>
                         </div>
                     ) : (
